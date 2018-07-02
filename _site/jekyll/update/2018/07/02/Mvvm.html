@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1"><!-- Begin Jekyll SEO tag v2.5.0 -->
+<title>基于ES5defineProperty 实现简单的 Mvvm框架</title>
+<meta name="generator" content="Jekyll v3.8.3" />
+<meta property="og:title" content="基于ES5defineProperty 实现简单的 Mvvm框架" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="PREPARE 现阶段前端三大主流框架react, vue, angular都属于 MVVM范畴，即 模型—视图—视图模型 采用数据驱动， 即监听数据改变，渲染view。 核心是监听数据的变更！ 其中React使用的是 diff 算法来实现数据变更检测的； Angular 则使用的是zone.js实现数据变更检测； Vue则使用Object.defineProperty, 后期版本则使用Object.Proxy 本文参考Vue 使用 Object.defineProperty实现数据变更检测， 实现一个简单的 mvvm框架 INIT 1.下面是一个简单的类Vue组件的实现方式 html &lt;div id=&quot;app&quot;&gt; &lt;h1&gt;&lt;/h1&gt; &lt;p&gt;&lt;/p&gt; &lt;p&gt;&lt;/p&gt; &lt;input type=&quot;text&quot; v-model=&quot;age&quot; /&gt; &lt;/div&gt; javascript let mvvm = new Mvvm({ el: &#39;#app&#39;, data: { song: 2, singer: { a: { b: 1 }, c: 1 }, age: 55 } }) 首先是一个 Mvvm类，接受两个参数（后期会加入method等参数）: el 和data。 2. 定义Mvvm类 function Mvvm(options = {}) { /*定义类的$option属性，_data私有属性，并将 私有$option.data的引用复制给私有属性_data和局部变 量data */ this.$options = options; let data = this._data = this.$options.data; /*将data中所有的key设置观察者，增加数据变更的检测*/ observe(data); /*将data中的所有的key代理到Mvvm实例上，形成mvvm实例树，方便书写*/ for (let key in data) { Object.defineProperty(this, key, { configurable: true, get() { return this._data[key]; }, set(newVal) { this._data[key] = newVal; } }) } /*数据如果变更，执行dom渲染*/ new Compile(this.$options.el, this) } 3.看一下 observe 方法： function observe(data) { if (!data || typeof data !== &#39;object&#39;) return; return new Observe(data); } 增加了一个data类型检测机制(实际上为了递归结尾判断)，实际上执行 Observe类的实例化 #####4. Observe类 function Observe(data) { /*创建一个消息订阅发布池类，包含一个watcher属性，watcher指向一个Watcher的实例，每个Watcher实例 都是一个订阅者，另一个属性是一个事件池数组events*/ let dep = new Dep(); /*data的每一个键值对循环执行observe方法*/ for (let key in data) { let val = data[key] observe(val); /*对data的每一个key进行数据拦截, 设置get，当创建一个Watcher实例的时候，显示触发get，此时将这个Watcher实例（订阅者）添加到消息订阅发布池的事件池中；设置set 当设置新的值时候，触发 set方法， 如果所设值与原来不相等， 则重新监听新的值得变更， 并触发Watcher实例（订阅者）的notify方法，触发 Watcher实例的回调，更新视图数据*/ Object.defineProperty(data, key, { configurable: true, get() { Dep.watcher &amp;&amp; dep.addEvent(Dep.watcher); return val; }, set(newVal) { if (val === newVal) { return; } val = newVal; observe(newVal); dep.notify(); } }) } } 5.消息订阅发布池Dep 类： function Dep() { this.watcher = null; this.events = []; } 实例： Dep.prototype = { addEvent(event) { this.events.push(event); }, notify() { this.events.forEach(event =&gt; event.update()) } } #####6. 订阅者Watcher 类 /*Watcher接收三个参数，第一个是整个mvvm实例树对象， 第二个是html中的插值表达式, fn为设置新值之后的会调*/ function Watcher(vm, exp, fn) { this.fn = fn; this.vm = vm; this.exp = exp; // 将watcher的实例赋值给Dep的watcher属性，方便调用，而不用传参 Dep.watcher = this; // 进行一次取值操作， 显示触发mvvm实例树某个key的get方法，从而将 Dep.watcher 添加到事件池中 // 将如song.a.b以点号分割成数组arr，将mvvm实例树的引用赋值给局部变量val let arr = exp.split(&#39;.&#39;); let val = vm; // 循环arr 取song.a.b的值 arr.forEach(key =&gt; { val = val[key] }); // 添加完之后，释放 Dep.watcher Dep.watcher = null; } 实例 /*Watcher实例的update方法会从mvvm实例树上取出exp所对应的值，并触发fn回调，渲染视图*/ Watcher.prototype.update = function () { let arr = this.exp.split(&#39;.&#39;); let val = this.vm; arr.forEach(key =&gt; { val = val[key] }); this.fn(val); } 7.Compile类 Compile类用于将所选的el元素节点 赋值给mvvm实例树，并转为createDocumentFragment 文档片段， 之后所需要替换的文本节点进行正则匹配并替换，之后将新的文档片段统一添加到el元素节点中。 关于文档碎片可以 在这里 了解 function Compile(el, vm) { /*获取元素节点*/ vm.$el = document.querySelector(el); /*创建文档碎片对象*/ let fragment = document.createDocumentFragment(); /*当vm.$el.firstChild存在时，将vm.$el.firstChild依次加入到文档碎片中*/ while (child = vm.$el.firstChild) { fragment.appendChild(child); } /*对html文档中的插值表达式等进行替换*/ function replace(frag) { Array.from(frag.childNodes).forEach(node =&gt; { // 插值表达式 let txt = node.textContent; let reg = /\{\{(.*?)\}\}/g； if (node.nodeType === 1 &amp;&amp; reg.test(txt)) { let arr = RegExp.$1.split(&#39;.&#39;); let val = vm; arr.forEach(key =&gt; { val = val[key] }); // 执行替换 node.textContent = txt.replace(reg, val).trim(); // 添加监听 new Watcher(vm, RegExp.$1, (newVal) =&gt; { node.textContent = txt.replace(reg, newVal).trim(); }) } // 双向数据绑定 if(node.nodeType ===1 ) { let nodeAttr = node.attributes; // console.log(nodeAttr) Map Array.from(nodeAttr).forEach(attr =&gt; { let name = attr.name; let value = attr.value; if (name.includes(&#39;v-&#39;)) { let arr = value.split(&#39;.&#39;); let val = vm; arr.forEach( key =&gt; { val = val[key] }) console.log(value) node.value = val } new Watcher(vm, value, (newVal) =&gt; { node.value = newVal; }); node.addEventListener(&#39;input&#39;, e =&gt; { // 根据传入的绑定值的对象深度值来处理， 如果是单个值，则直接赋值， 如果是多个，则使用eval()函数处理 if(value.split(&#39;.&#39;).length &gt; 1) { eval(&quot;vm.&quot;+ value + &quot;= e.target.value&quot;); } else { vm[value] = e.target.value } }) }) } if (node.childNodes &amp;&amp; node.childNodes.length) { replace(node) } }) } replace(fragment); vm.$el.appendChild(fragment); } LAODED 以上是一个简单的mvvm框架的实现，当然defineProperty还是有一些问题，比如说对应数组的变更检测是办不到，而Proxy的出现则解决了这类问题，有时间的话，大家可以试试基于Proxy去实现一套简单的mvvm框架。" />
+<meta property="og:description" content="PREPARE 现阶段前端三大主流框架react, vue, angular都属于 MVVM范畴，即 模型—视图—视图模型 采用数据驱动， 即监听数据改变，渲染view。 核心是监听数据的变更！ 其中React使用的是 diff 算法来实现数据变更检测的； Angular 则使用的是zone.js实现数据变更检测； Vue则使用Object.defineProperty, 后期版本则使用Object.Proxy 本文参考Vue 使用 Object.defineProperty实现数据变更检测， 实现一个简单的 mvvm框架 INIT 1.下面是一个简单的类Vue组件的实现方式 html &lt;div id=&quot;app&quot;&gt; &lt;h1&gt;&lt;/h1&gt; &lt;p&gt;&lt;/p&gt; &lt;p&gt;&lt;/p&gt; &lt;input type=&quot;text&quot; v-model=&quot;age&quot; /&gt; &lt;/div&gt; javascript let mvvm = new Mvvm({ el: &#39;#app&#39;, data: { song: 2, singer: { a: { b: 1 }, c: 1 }, age: 55 } }) 首先是一个 Mvvm类，接受两个参数（后期会加入method等参数）: el 和data。 2. 定义Mvvm类 function Mvvm(options = {}) { /*定义类的$option属性，_data私有属性，并将 私有$option.data的引用复制给私有属性_data和局部变 量data */ this.$options = options; let data = this._data = this.$options.data; /*将data中所有的key设置观察者，增加数据变更的检测*/ observe(data); /*将data中的所有的key代理到Mvvm实例上，形成mvvm实例树，方便书写*/ for (let key in data) { Object.defineProperty(this, key, { configurable: true, get() { return this._data[key]; }, set(newVal) { this._data[key] = newVal; } }) } /*数据如果变更，执行dom渲染*/ new Compile(this.$options.el, this) } 3.看一下 observe 方法： function observe(data) { if (!data || typeof data !== &#39;object&#39;) return; return new Observe(data); } 增加了一个data类型检测机制(实际上为了递归结尾判断)，实际上执行 Observe类的实例化 #####4. Observe类 function Observe(data) { /*创建一个消息订阅发布池类，包含一个watcher属性，watcher指向一个Watcher的实例，每个Watcher实例 都是一个订阅者，另一个属性是一个事件池数组events*/ let dep = new Dep(); /*data的每一个键值对循环执行observe方法*/ for (let key in data) { let val = data[key] observe(val); /*对data的每一个key进行数据拦截, 设置get，当创建一个Watcher实例的时候，显示触发get，此时将这个Watcher实例（订阅者）添加到消息订阅发布池的事件池中；设置set 当设置新的值时候，触发 set方法， 如果所设值与原来不相等， 则重新监听新的值得变更， 并触发Watcher实例（订阅者）的notify方法，触发 Watcher实例的回调，更新视图数据*/ Object.defineProperty(data, key, { configurable: true, get() { Dep.watcher &amp;&amp; dep.addEvent(Dep.watcher); return val; }, set(newVal) { if (val === newVal) { return; } val = newVal; observe(newVal); dep.notify(); } }) } } 5.消息订阅发布池Dep 类： function Dep() { this.watcher = null; this.events = []; } 实例： Dep.prototype = { addEvent(event) { this.events.push(event); }, notify() { this.events.forEach(event =&gt; event.update()) } } #####6. 订阅者Watcher 类 /*Watcher接收三个参数，第一个是整个mvvm实例树对象， 第二个是html中的插值表达式, fn为设置新值之后的会调*/ function Watcher(vm, exp, fn) { this.fn = fn; this.vm = vm; this.exp = exp; // 将watcher的实例赋值给Dep的watcher属性，方便调用，而不用传参 Dep.watcher = this; // 进行一次取值操作， 显示触发mvvm实例树某个key的get方法，从而将 Dep.watcher 添加到事件池中 // 将如song.a.b以点号分割成数组arr，将mvvm实例树的引用赋值给局部变量val let arr = exp.split(&#39;.&#39;); let val = vm; // 循环arr 取song.a.b的值 arr.forEach(key =&gt; { val = val[key] }); // 添加完之后，释放 Dep.watcher Dep.watcher = null; } 实例 /*Watcher实例的update方法会从mvvm实例树上取出exp所对应的值，并触发fn回调，渲染视图*/ Watcher.prototype.update = function () { let arr = this.exp.split(&#39;.&#39;); let val = this.vm; arr.forEach(key =&gt; { val = val[key] }); this.fn(val); } 7.Compile类 Compile类用于将所选的el元素节点 赋值给mvvm实例树，并转为createDocumentFragment 文档片段， 之后所需要替换的文本节点进行正则匹配并替换，之后将新的文档片段统一添加到el元素节点中。 关于文档碎片可以 在这里 了解 function Compile(el, vm) { /*获取元素节点*/ vm.$el = document.querySelector(el); /*创建文档碎片对象*/ let fragment = document.createDocumentFragment(); /*当vm.$el.firstChild存在时，将vm.$el.firstChild依次加入到文档碎片中*/ while (child = vm.$el.firstChild) { fragment.appendChild(child); } /*对html文档中的插值表达式等进行替换*/ function replace(frag) { Array.from(frag.childNodes).forEach(node =&gt; { // 插值表达式 let txt = node.textContent; let reg = /\{\{(.*?)\}\}/g； if (node.nodeType === 1 &amp;&amp; reg.test(txt)) { let arr = RegExp.$1.split(&#39;.&#39;); let val = vm; arr.forEach(key =&gt; { val = val[key] }); // 执行替换 node.textContent = txt.replace(reg, val).trim(); // 添加监听 new Watcher(vm, RegExp.$1, (newVal) =&gt; { node.textContent = txt.replace(reg, newVal).trim(); }) } // 双向数据绑定 if(node.nodeType ===1 ) { let nodeAttr = node.attributes; // console.log(nodeAttr) Map Array.from(nodeAttr).forEach(attr =&gt; { let name = attr.name; let value = attr.value; if (name.includes(&#39;v-&#39;)) { let arr = value.split(&#39;.&#39;); let val = vm; arr.forEach( key =&gt; { val = val[key] }) console.log(value) node.value = val } new Watcher(vm, value, (newVal) =&gt; { node.value = newVal; }); node.addEventListener(&#39;input&#39;, e =&gt; { // 根据传入的绑定值的对象深度值来处理， 如果是单个值，则直接赋值， 如果是多个，则使用eval()函数处理 if(value.split(&#39;.&#39;).length &gt; 1) { eval(&quot;vm.&quot;+ value + &quot;= e.target.value&quot;); } else { vm[value] = e.target.value } }) }) } if (node.childNodes &amp;&amp; node.childNodes.length) { replace(node) } }) } replace(fragment); vm.$el.appendChild(fragment); } LAODED 以上是一个简单的mvvm框架的实现，当然defineProperty还是有一些问题，比如说对应数组的变更检测是办不到，而Proxy的出现则解决了这类问题，有时间的话，大家可以试试基于Proxy去实现一套简单的mvvm框架。" />
+<link rel="canonical" href="/jekyll/update/2018/07/02/Mvvm.html" />
+<meta property="og:url" content="/jekyll/update/2018/07/02/Mvvm.html" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2018-07-02T23:09:40+08:00" />
+<script type="application/ld+json">
+{"description":"PREPARE 现阶段前端三大主流框架react, vue, angular都属于 MVVM范畴，即 模型—视图—视图模型 采用数据驱动， 即监听数据改变，渲染view。 核心是监听数据的变更！ 其中React使用的是 diff 算法来实现数据变更检测的； Angular 则使用的是zone.js实现数据变更检测； Vue则使用Object.defineProperty, 后期版本则使用Object.Proxy 本文参考Vue 使用 Object.defineProperty实现数据变更检测， 实现一个简单的 mvvm框架 INIT 1.下面是一个简单的类Vue组件的实现方式 html &lt;div id=&quot;app&quot;&gt; &lt;h1&gt;&lt;/h1&gt; &lt;p&gt;&lt;/p&gt; &lt;p&gt;&lt;/p&gt; &lt;input type=&quot;text&quot; v-model=&quot;age&quot; /&gt; &lt;/div&gt; javascript let mvvm = new Mvvm({ el: &#39;#app&#39;, data: { song: 2, singer: { a: { b: 1 }, c: 1 }, age: 55 } }) 首先是一个 Mvvm类，接受两个参数（后期会加入method等参数）: el 和data。 2. 定义Mvvm类 function Mvvm(options = {}) { /*定义类的$option属性，_data私有属性，并将 私有$option.data的引用复制给私有属性_data和局部变 量data */ this.$options = options; let data = this._data = this.$options.data; /*将data中所有的key设置观察者，增加数据变更的检测*/ observe(data); /*将data中的所有的key代理到Mvvm实例上，形成mvvm实例树，方便书写*/ for (let key in data) { Object.defineProperty(this, key, { configurable: true, get() { return this._data[key]; }, set(newVal) { this._data[key] = newVal; } }) } /*数据如果变更，执行dom渲染*/ new Compile(this.$options.el, this) } 3.看一下 observe 方法： function observe(data) { if (!data || typeof data !== &#39;object&#39;) return; return new Observe(data); } 增加了一个data类型检测机制(实际上为了递归结尾判断)，实际上执行 Observe类的实例化 #####4. Observe类 function Observe(data) { /*创建一个消息订阅发布池类，包含一个watcher属性，watcher指向一个Watcher的实例，每个Watcher实例 都是一个订阅者，另一个属性是一个事件池数组events*/ let dep = new Dep(); /*data的每一个键值对循环执行observe方法*/ for (let key in data) { let val = data[key] observe(val); /*对data的每一个key进行数据拦截, 设置get，当创建一个Watcher实例的时候，显示触发get，此时将这个Watcher实例（订阅者）添加到消息订阅发布池的事件池中；设置set 当设置新的值时候，触发 set方法， 如果所设值与原来不相等， 则重新监听新的值得变更， 并触发Watcher实例（订阅者）的notify方法，触发 Watcher实例的回调，更新视图数据*/ Object.defineProperty(data, key, { configurable: true, get() { Dep.watcher &amp;&amp; dep.addEvent(Dep.watcher); return val; }, set(newVal) { if (val === newVal) { return; } val = newVal; observe(newVal); dep.notify(); } }) } } 5.消息订阅发布池Dep 类： function Dep() { this.watcher = null; this.events = []; } 实例： Dep.prototype = { addEvent(event) { this.events.push(event); }, notify() { this.events.forEach(event =&gt; event.update()) } } #####6. 订阅者Watcher 类 /*Watcher接收三个参数，第一个是整个mvvm实例树对象， 第二个是html中的插值表达式, fn为设置新值之后的会调*/ function Watcher(vm, exp, fn) { this.fn = fn; this.vm = vm; this.exp = exp; // 将watcher的实例赋值给Dep的watcher属性，方便调用，而不用传参 Dep.watcher = this; // 进行一次取值操作， 显示触发mvvm实例树某个key的get方法，从而将 Dep.watcher 添加到事件池中 // 将如song.a.b以点号分割成数组arr，将mvvm实例树的引用赋值给局部变量val let arr = exp.split(&#39;.&#39;); let val = vm; // 循环arr 取song.a.b的值 arr.forEach(key =&gt; { val = val[key] }); // 添加完之后，释放 Dep.watcher Dep.watcher = null; } 实例 /*Watcher实例的update方法会从mvvm实例树上取出exp所对应的值，并触发fn回调，渲染视图*/ Watcher.prototype.update = function () { let arr = this.exp.split(&#39;.&#39;); let val = this.vm; arr.forEach(key =&gt; { val = val[key] }); this.fn(val); } 7.Compile类 Compile类用于将所选的el元素节点 赋值给mvvm实例树，并转为createDocumentFragment 文档片段， 之后所需要替换的文本节点进行正则匹配并替换，之后将新的文档片段统一添加到el元素节点中。 关于文档碎片可以 在这里 了解 function Compile(el, vm) { /*获取元素节点*/ vm.$el = document.querySelector(el); /*创建文档碎片对象*/ let fragment = document.createDocumentFragment(); /*当vm.$el.firstChild存在时，将vm.$el.firstChild依次加入到文档碎片中*/ while (child = vm.$el.firstChild) { fragment.appendChild(child); } /*对html文档中的插值表达式等进行替换*/ function replace(frag) { Array.from(frag.childNodes).forEach(node =&gt; { // 插值表达式 let txt = node.textContent; let reg = /\\{\\{(.*?)\\}\\}/g； if (node.nodeType === 1 &amp;&amp; reg.test(txt)) { let arr = RegExp.$1.split(&#39;.&#39;); let val = vm; arr.forEach(key =&gt; { val = val[key] }); // 执行替换 node.textContent = txt.replace(reg, val).trim(); // 添加监听 new Watcher(vm, RegExp.$1, (newVal) =&gt; { node.textContent = txt.replace(reg, newVal).trim(); }) } // 双向数据绑定 if(node.nodeType ===1 ) { let nodeAttr = node.attributes; // console.log(nodeAttr) Map Array.from(nodeAttr).forEach(attr =&gt; { let name = attr.name; let value = attr.value; if (name.includes(&#39;v-&#39;)) { let arr = value.split(&#39;.&#39;); let val = vm; arr.forEach( key =&gt; { val = val[key] }) console.log(value) node.value = val } new Watcher(vm, value, (newVal) =&gt; { node.value = newVal; }); node.addEventListener(&#39;input&#39;, e =&gt; { // 根据传入的绑定值的对象深度值来处理， 如果是单个值，则直接赋值， 如果是多个，则使用eval()函数处理 if(value.split(&#39;.&#39;).length &gt; 1) { eval(&quot;vm.&quot;+ value + &quot;= e.target.value&quot;); } else { vm[value] = e.target.value } }) }) } if (node.childNodes &amp;&amp; node.childNodes.length) { replace(node) } }) } replace(fragment); vm.$el.appendChild(fragment); } LAODED 以上是一个简单的mvvm框架的实现，当然defineProperty还是有一些问题，比如说对应数组的变更检测是办不到，而Proxy的出现则解决了这类问题，有时间的话，大家可以试试基于Proxy去实现一套简单的mvvm框架。","@type":"BlogPosting","url":"/jekyll/update/2018/07/02/Mvvm.html","headline":"基于ES5defineProperty 实现简单的 Mvvm框架","dateModified":"2018-07-02T23:09:40+08:00","datePublished":"2018-07-02T23:09:40+08:00","mainEntityOfPage":{"@type":"WebPage","@id":"/jekyll/update/2018/07/02/Mvvm.html"},"@context":"http://schema.org"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css"><link type="application/atom+xml" rel="alternate" href="/feed.xml" /></head>
+<body><header class="site-header" role="banner">
+
+  <div class="wrapper"><a class="site-title" rel="author" href="/"></a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger" />
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewBox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"/>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger"><a class="page-link" href="/about/">About</a></div>
+      </nav></div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">基于ES5`defineProperty` 实现简单的 Mvvm框架</h1>
+    <p class="post-meta">
+      <time class="dt-published" datetime="2018-07-02T23:09:40+08:00" itemprop="datePublished">Jul 2, 2018
+      </time></p>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <h4 id="prepare">PREPARE</h4>
+<hr />
+<blockquote>
+  <p>现阶段前端三大主流框架<code class="highlighter-rouge">react</code>,<code class="highlighter-rouge"> vue</code>, <code class="highlighter-rouge">angular</code>都属于 MVVM范畴，即 模型—视图—视图模型</p>
+
+  <p><img src="./mvvm.png" alt="mvvm" /></p>
+
+  <p>采用数据驱动， 即监听数据改变，渲染view。</p>
+
+  <p>核心是监听数据的变更！</p>
+
+  <p>其中<code class="highlighter-rouge">React</code>使用的是 <code class="highlighter-rouge">diff</code>  算法来实现数据变更检测的；</p>
+
+  <p><code class="highlighter-rouge">Angular</code> 则使用的是<code class="highlighter-rouge">zone.js</code>实现数据变更检测；</p>
+
+  <p><code class="highlighter-rouge">Vue</code>则使用<code class="highlighter-rouge">Object.defineProperty</code>, 后期版本则使用<code class="highlighter-rouge">Object.Proxy</code></p>
+
+  <p>本文参考<code class="highlighter-rouge">Vue</code> 使用 <code class="highlighter-rouge">Object.defineProperty</code>实现数据变更检测， 实现一个简单的 <code class="highlighter-rouge">mvvm</code>框架</p>
+</blockquote>
+
+<h4 id="init">INIT</h4>
+
+<h5 id="1下面是一个简单的类vue组件的实现方式">1.下面是一个简单的类<code class="highlighter-rouge">Vue</code>组件的实现方式</h5>
+
+<ul>
+  <li>
+    <p>html</p>
+
+    <div class="language-html highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nt">&lt;div</span> <span class="na">id=</span><span class="s">"app"</span><span class="nt">&gt;</span>
+    <span class="nt">&lt;h1&gt;&lt;/h1&gt;</span>
+    <span class="nt">&lt;p&gt;&lt;/p&gt;</span>
+    <span class="nt">&lt;p&gt;&lt;/p&gt;</span>
+    <span class="nt">&lt;input</span> <span class="na">type=</span><span class="s">"text"</span> <span class="na">v-model=</span><span class="s">"age"</span> <span class="nt">/&gt;</span>
+<span class="nt">&lt;/div&gt;</span>
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p>javascript</p>
+
+    <div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kd">let</span> <span class="nx">mvvm</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Mvvm</span><span class="p">({</span>
+            <span class="na">el</span><span class="p">:</span> <span class="s1">'#app'</span><span class="p">,</span>
+            <span class="na">data</span><span class="p">:</span> <span class="p">{</span>
+                <span class="na">song</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+                <span class="na">singer</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="na">a</span><span class="p">:</span> <span class="p">{</span>
+                        <span class="na">b</span><span class="p">:</span> <span class="mi">1</span>
+                    <span class="p">},</span>
+                    <span class="na">c</span><span class="p">:</span> <span class="mi">1</span>
+                <span class="p">},</span>
+                <span class="na">age</span><span class="p">:</span> <span class="mi">55</span>
+            <span class="p">}</span>
+        <span class="p">})</span>
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p>首先是一个 <code class="highlighter-rouge">Mvvm</code>类，接受两个参数（后期会加入method等参数）: <code class="highlighter-rouge">el</code> 和<code class="highlighter-rouge">data</code>。</p>
+  </li>
+</ul>
+
+<h5 id="2-定义mvvm类">2. 定义<code class="highlighter-rouge">Mvvm</code>类</h5>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nx">Mvvm</span><span class="p">(</span><span class="nx">options</span> <span class="o">=</span> <span class="p">{})</span> <span class="p">{</span>
+    
+    <span class="cm">/*定义类的$option属性，_data私有属性，并将 私有$option.data的引用复制给私有属性_data和局部变  量data
+     */</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">$options</span> <span class="o">=</span> <span class="nx">options</span><span class="p">;</span>
+    <span class="kd">let</span> <span class="nx">data</span> <span class="o">=</span> <span class="k">this</span><span class="p">.</span><span class="nx">_data</span> <span class="o">=</span> <span class="k">this</span><span class="p">.</span><span class="nx">$options</span><span class="p">.</span><span class="nx">data</span><span class="p">;</span>
+    
+    <span class="cm">/*将data中所有的key设置观察者，增加数据变更的检测*/</span>
+    <span class="nx">observe</span><span class="p">(</span><span class="nx">data</span><span class="p">);</span>
+    
+    <span class="cm">/*将data中的所有的key代理到Mvvm实例上，形成mvvm实例树，方便书写*/</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kd">let</span> <span class="nx">key</span> <span class="k">in</span> <span class="nx">data</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nb">Object</span><span class="p">.</span><span class="nx">defineProperty</span><span class="p">(</span><span class="k">this</span><span class="p">,</span> <span class="nx">key</span><span class="p">,</span> <span class="p">{</span>
+            <span class="na">configurable</span><span class="p">:</span> <span class="kc">true</span><span class="p">,</span>
+            <span class="kd">get</span><span class="p">()</span> <span class="p">{</span>
+                <span class="k">return</span> <span class="k">this</span><span class="p">.</span><span class="nx">_data</span><span class="p">[</span><span class="nx">key</span><span class="p">];</span>
+            <span class="p">},</span>
+            <span class="kd">set</span><span class="p">(</span><span class="nx">newVal</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">this</span><span class="p">.</span><span class="nx">_data</span><span class="p">[</span><span class="nx">key</span><span class="p">]</span> <span class="o">=</span> <span class="nx">newVal</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">})</span>
+    <span class="p">}</span>
+    
+    <span class="cm">/*数据如果变更，执行dom渲染*/</span>
+    <span class="k">new</span> <span class="nx">Compile</span><span class="p">(</span><span class="k">this</span><span class="p">.</span><span class="nx">$options</span><span class="p">.</span><span class="nx">el</span><span class="p">,</span> <span class="k">this</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<h5 id="3看一下-observe-方法">3.看一下 <code class="highlighter-rouge">observe</code> 方法：</h5>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nx">observe</span><span class="p">(</span><span class="nx">data</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="nx">data</span> <span class="o">||</span> <span class="k">typeof</span> <span class="nx">data</span> <span class="o">!==</span> <span class="s1">'object'</span><span class="p">)</span> <span class="k">return</span><span class="p">;</span>
+    <span class="k">return</span> <span class="k">new</span> <span class="nx">Observe</span><span class="p">(</span><span class="nx">data</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>增加了一个<code class="highlighter-rouge">data</code>类型检测机制(实际上为了递归结尾判断)，实际上执行 <code class="highlighter-rouge">Observe</code>类的实例化</p>
+
+<p>#####4. <code class="highlighter-rouge">Observe</code>类</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nx">Observe</span><span class="p">(</span><span class="nx">data</span><span class="p">)</span> <span class="p">{</span>
+    
+    <span class="cm">/*创建一个消息订阅发布池类，包含一个watcher属性，watcher指向一个Watcher的实例，每个Watcher实例  都是一个订阅者，另一个属性是一个事件池数组events*/</span>    
+    <span class="kd">let</span> <span class="nx">dep</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Dep</span><span class="p">();</span>
+    
+    <span class="cm">/*data的每一个键值对循环执行observe方法*/</span>
+    <span class="k">for</span> <span class="p">(</span><span class="kd">let</span> <span class="nx">key</span> <span class="k">in</span> <span class="nx">data</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kd">let</span> <span class="nx">val</span> <span class="o">=</span> <span class="nx">data</span><span class="p">[</span><span class="nx">key</span><span class="p">]</span>
+        <span class="nx">observe</span><span class="p">(</span><span class="nx">val</span><span class="p">);</span>
+        
+        <span class="cm">/*对data的每一个key进行数据拦截, 设置get，当创建一个Watcher实例的时候，显示触发get，此时将这个Watcher实例（订阅者）添加到消息订阅发布池的事件池中；设置set 当设置新的值时候，触发 set方法， 如果所设值与原来不相等， 则重新监听新的值得变更， 并触发Watcher实例（订阅者）的notify方法，触发 Watcher实例的回调，更新视图数据*/</span>
+        <span class="nb">Object</span><span class="p">.</span><span class="nx">defineProperty</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span> <span class="nx">key</span><span class="p">,</span> <span class="p">{</span>
+            <span class="na">configurable</span><span class="p">:</span> <span class="kc">true</span><span class="p">,</span>
+            <span class="kd">get</span><span class="p">()</span> <span class="p">{</span>
+                <span class="nx">Dep</span><span class="p">.</span><span class="nx">watcher</span> <span class="o">&amp;&amp;</span> <span class="nx">dep</span><span class="p">.</span><span class="nx">addEvent</span><span class="p">(</span><span class="nx">Dep</span><span class="p">.</span><span class="nx">watcher</span><span class="p">);</span>
+                <span class="k">return</span> <span class="nx">val</span><span class="p">;</span>
+            <span class="p">},</span>
+            <span class="kd">set</span><span class="p">(</span><span class="nx">newVal</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">if</span> <span class="p">(</span><span class="nx">val</span> <span class="o">===</span> <span class="nx">newVal</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="k">return</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="nx">val</span> <span class="o">=</span> <span class="nx">newVal</span><span class="p">;</span>
+                <span class="nx">observe</span><span class="p">(</span><span class="nx">newVal</span><span class="p">);</span>
+                <span class="nx">dep</span><span class="p">.</span><span class="nx">notify</span><span class="p">();</span>
+            <span class="p">}</span>
+        <span class="p">})</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h5 id="5消息订阅发布池dep">5.消息订阅发布池<code class="highlighter-rouge">Dep</code></h5>
+
+<ul>
+  <li>
+    <p>类：</p>
+
+    <div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nx">Dep</span><span class="p">()</span> <span class="p">{</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">watcher</span> <span class="o">=</span> <span class="kc">null</span><span class="p">;</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">events</span> <span class="o">=</span> <span class="p">[];</span>
+<span class="p">}</span>
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p>实例：</p>
+
+    <div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">Dep</span><span class="p">.</span><span class="nx">prototype</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="nx">addEvent</span><span class="p">(</span><span class="nx">event</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">this</span><span class="p">.</span><span class="nx">events</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="nx">event</span><span class="p">);</span>
+    <span class="p">},</span>
+  
+    <span class="nx">notify</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">this</span><span class="p">.</span><span class="nx">events</span><span class="p">.</span><span class="nx">forEach</span><span class="p">(</span><span class="nx">event</span> <span class="o">=&gt;</span> <span class="nx">event</span><span class="p">.</span><span class="nx">update</span><span class="p">())</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>    </div>
+  </li>
+</ul>
+
+<p>#####6. 订阅者<code class="highlighter-rouge">Watcher</code></p>
+
+<ul>
+  <li>
+    <p>类</p>
+
+    <div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cm">/*Watcher接收三个参数，第一个是整个mvvm实例树对象， 第二个是html中的插值表达式, fn为设置新值之后的会调*/</span>
+<span class="kd">function</span> <span class="nx">Watcher</span><span class="p">(</span><span class="nx">vm</span><span class="p">,</span> <span class="nx">exp</span><span class="p">,</span> <span class="nx">fn</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">fn</span> <span class="o">=</span> <span class="nx">fn</span><span class="p">;</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">vm</span> <span class="o">=</span> <span class="nx">vm</span><span class="p">;</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">exp</span> <span class="o">=</span> <span class="nx">exp</span><span class="p">;</span>
+    <span class="c1">// 将watcher的实例赋值给Dep的watcher属性，方便调用，而不用传参</span>
+    <span class="nx">Dep</span><span class="p">.</span><span class="nx">watcher</span> <span class="o">=</span> <span class="k">this</span><span class="p">;</span>
+      
+    <span class="c1">// 进行一次取值操作， 显示触发mvvm实例树某个key的get方法，从而将 Dep.watcher 添加到事件池中</span>
+    <span class="c1">// 将如song.a.b以点号分割成数组arr，将mvvm实例树的引用赋值给局部变量val</span>
+    <span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="nx">exp</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">'.'</span><span class="p">);</span>
+    <span class="kd">let</span> <span class="nx">val</span> <span class="o">=</span> <span class="nx">vm</span><span class="p">;</span>
+    <span class="c1">// 循环arr 取song.a.b的值</span>
+    <span class="nx">arr</span><span class="p">.</span><span class="nx">forEach</span><span class="p">(</span><span class="nx">key</span> <span class="o">=&gt;</span> <span class="p">{</span>
+        <span class="nx">val</span> <span class="o">=</span> <span class="nx">val</span><span class="p">[</span><span class="nx">key</span><span class="p">]</span>
+    <span class="p">});</span>
+    <span class="c1">// 添加完之后，释放 Dep.watcher</span>
+    <span class="nx">Dep</span><span class="p">.</span><span class="nx">watcher</span>  <span class="o">=</span> <span class="kc">null</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p>实例</p>
+
+    <div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  
+<span class="cm">/*Watcher实例的update方法会从mvvm实例树上取出exp所对应的值，并触发fn回调，渲染视图*/</span>
+<span class="nx">Watcher</span><span class="p">.</span><span class="nx">prototype</span><span class="p">.</span><span class="nx">update</span> <span class="o">=</span> <span class="kd">function</span> <span class="p">()</span> <span class="p">{</span>
+    <span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="k">this</span><span class="p">.</span><span class="nx">exp</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">'.'</span><span class="p">);</span>
+    <span class="kd">let</span> <span class="nx">val</span> <span class="o">=</span> <span class="k">this</span><span class="p">.</span><span class="nx">vm</span><span class="p">;</span>
+    <span class="nx">arr</span><span class="p">.</span><span class="nx">forEach</span><span class="p">(</span><span class="nx">key</span> <span class="o">=&gt;</span> <span class="p">{</span>
+        <span class="nx">val</span> <span class="o">=</span> <span class="nx">val</span><span class="p">[</span><span class="nx">key</span><span class="p">]</span>
+    <span class="p">});</span>
+    <span class="k">this</span><span class="p">.</span><span class="nx">fn</span><span class="p">(</span><span class="nx">val</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>    </div>
+  </li>
+</ul>
+
+<h5 id="7compile类">7.Compile类</h5>
+
+<p>Compile类用于将所选的<code class="highlighter-rouge">el</code>元素节点 赋值给<code class="highlighter-rouge">mvvm</code>实例树，并转为<code class="highlighter-rouge">createDocumentFragment</code>  文档片段， 之后所需要替换的文本节点进行正则匹配并替换，之后将新的文档片段统一添加到<code class="highlighter-rouge">el</code>元素节点中。</p>
+
+<p>关于文档碎片可以 <a href="https://developer.mozilla.org/en-US/docs/Web/API/Document/createDocumentFragment">在这里</a> 了解</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nx">Compile</span><span class="p">(</span><span class="nx">el</span><span class="p">,</span> <span class="nx">vm</span><span class="p">)</span> <span class="p">{</span>
+    <span class="cm">/*获取元素节点*/</span>
+    <span class="nx">vm</span><span class="p">.</span><span class="nx">$el</span> <span class="o">=</span> <span class="nb">document</span><span class="p">.</span><span class="nx">querySelector</span><span class="p">(</span><span class="nx">el</span><span class="p">);</span>
+    
+    <span class="cm">/*创建文档碎片对象*/</span>
+    <span class="kd">let</span> <span class="nx">fragment</span> <span class="o">=</span> <span class="nb">document</span><span class="p">.</span><span class="nx">createDocumentFragment</span><span class="p">();</span>
+    
+    <span class="cm">/*当vm.$el.firstChild存在时，将vm.$el.firstChild依次加入到文档碎片中*/</span>
+    <span class="k">while</span> <span class="p">(</span><span class="nx">child</span> <span class="o">=</span> <span class="nx">vm</span><span class="p">.</span><span class="nx">$el</span><span class="p">.</span><span class="nx">firstChild</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nx">fragment</span><span class="p">.</span><span class="nx">appendChild</span><span class="p">(</span><span class="nx">child</span><span class="p">);</span>
+    <span class="p">}</span>
+    
+    <span class="cm">/*对html文档中的插值表达式等进行替换*/</span>
+    <span class="kd">function</span> <span class="nx">replace</span><span class="p">(</span><span class="nx">frag</span><span class="p">)</span> <span class="p">{</span>
+        
+       
+        <span class="nb">Array</span><span class="p">.</span><span class="k">from</span><span class="p">(</span><span class="nx">frag</span><span class="p">.</span><span class="nx">childNodes</span><span class="p">).</span><span class="nx">forEach</span><span class="p">(</span><span class="nx">node</span> <span class="o">=&gt;</span> <span class="p">{</span>
+            
+            <span class="c1">// 插值表达式</span>
+            <span class="kd">let</span> <span class="nx">txt</span> <span class="o">=</span> <span class="nx">node</span><span class="p">.</span><span class="nx">textContent</span><span class="p">;</span>
+            <span class="kd">let</span> <span class="nx">reg</span> <span class="o">=</span> <span class="sr">/</span><span class="se">\{\{(</span><span class="sr">.*</span><span class="se">?)\}\}</span><span class="sr">/g</span><span class="err">；</span>
+            <span class="k">if</span> <span class="p">(</span><span class="nx">node</span><span class="p">.</span><span class="nx">nodeType</span> <span class="o">===</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="nx">reg</span><span class="p">.</span><span class="nx">test</span><span class="p">(</span><span class="nx">txt</span><span class="p">))</span> <span class="p">{</span>
+                <span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="nb">RegExp</span><span class="p">.</span><span class="nx">$1</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">'.'</span><span class="p">);</span>
+                <span class="kd">let</span> <span class="nx">val</span> <span class="o">=</span> <span class="nx">vm</span><span class="p">;</span>
+                <span class="nx">arr</span><span class="p">.</span><span class="nx">forEach</span><span class="p">(</span><span class="nx">key</span> <span class="o">=&gt;</span> <span class="p">{</span>
+                    <span class="nx">val</span> <span class="o">=</span> <span class="nx">val</span><span class="p">[</span><span class="nx">key</span><span class="p">]</span>
+                <span class="p">});</span>
+                <span class="c1">// 执行替换</span>
+                <span class="nx">node</span><span class="p">.</span><span class="nx">textContent</span> <span class="o">=</span> <span class="nx">txt</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="nx">reg</span><span class="p">,</span> <span class="nx">val</span><span class="p">).</span><span class="nx">trim</span><span class="p">();</span>
+                
+                <span class="c1">// 添加监听</span>
+                <span class="k">new</span> <span class="nx">Watcher</span><span class="p">(</span><span class="nx">vm</span><span class="p">,</span> <span class="nb">RegExp</span><span class="p">.</span><span class="nx">$1</span><span class="p">,</span> <span class="p">(</span><span class="nx">newVal</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">{</span>
+                    <span class="nx">node</span><span class="p">.</span><span class="nx">textContent</span> <span class="o">=</span> <span class="nx">txt</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="nx">reg</span><span class="p">,</span> <span class="nx">newVal</span><span class="p">).</span><span class="nx">trim</span><span class="p">();</span>
+                <span class="p">})</span>
+            <span class="p">}</span>
+            
+            <span class="c1">// 双向数据绑定</span>
+            <span class="k">if</span><span class="p">(</span><span class="nx">node</span><span class="p">.</span><span class="nx">nodeType</span> <span class="o">===</span><span class="mi">1</span> <span class="p">)</span> <span class="p">{</span>
+                <span class="kd">let</span> <span class="nx">nodeAttr</span> <span class="o">=</span> <span class="nx">node</span><span class="p">.</span><span class="nx">attributes</span><span class="p">;</span>
+                <span class="c1">// console.log(nodeAttr)  Map</span>
+
+                <span class="nb">Array</span><span class="p">.</span><span class="k">from</span><span class="p">(</span><span class="nx">nodeAttr</span><span class="p">).</span><span class="nx">forEach</span><span class="p">(</span><span class="nx">attr</span> <span class="o">=&gt;</span> <span class="p">{</span>
+                    <span class="kd">let</span> <span class="nx">name</span> <span class="o">=</span> <span class="nx">attr</span><span class="p">.</span><span class="nx">name</span><span class="p">;</span>
+                    <span class="kd">let</span> <span class="nx">value</span> <span class="o">=</span> <span class="nx">attr</span><span class="p">.</span><span class="nx">value</span><span class="p">;</span>
+
+                    <span class="k">if</span> <span class="p">(</span><span class="nx">name</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="s1">'v-'</span><span class="p">))</span> <span class="p">{</span>
+                        
+                        <span class="kd">let</span> <span class="nx">arr</span> <span class="o">=</span> <span class="nx">value</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">'.'</span><span class="p">);</span>
+                        <span class="kd">let</span> <span class="nx">val</span> <span class="o">=</span> <span class="nx">vm</span><span class="p">;</span>
+                        <span class="nx">arr</span><span class="p">.</span><span class="nx">forEach</span><span class="p">(</span> <span class="nx">key</span> <span class="o">=&gt;</span> <span class="p">{</span>
+                            <span class="nx">val</span> <span class="o">=</span> <span class="nx">val</span><span class="p">[</span><span class="nx">key</span><span class="p">]</span>
+                        <span class="p">})</span>
+                        <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">value</span><span class="p">)</span>
+                        <span class="nx">node</span><span class="p">.</span><span class="nx">value</span> <span class="o">=</span> <span class="nx">val</span>
+                    <span class="p">}</span>
+
+                    <span class="k">new</span> <span class="nx">Watcher</span><span class="p">(</span><span class="nx">vm</span><span class="p">,</span> <span class="nx">value</span><span class="p">,</span> <span class="p">(</span><span class="nx">newVal</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">{</span>
+                        <span class="nx">node</span><span class="p">.</span><span class="nx">value</span> <span class="o">=</span> <span class="nx">newVal</span><span class="p">;</span>
+                    <span class="p">});</span>
+
+                    <span class="nx">node</span><span class="p">.</span><span class="nx">addEventListener</span><span class="p">(</span><span class="s1">'input'</span><span class="p">,</span> <span class="nx">e</span> <span class="o">=&gt;</span> <span class="p">{</span>
+                        <span class="c1">// 根据传入的绑定值的对象深度值来处理， 如果是单个值，则直接赋值， 如果是多个，则使用eval()函数处理</span>
+                        <span class="k">if</span><span class="p">(</span><span class="nx">value</span><span class="p">.</span><span class="nx">split</span><span class="p">(</span><span class="s1">'.'</span><span class="p">).</span><span class="nx">length</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>  
+                            <span class="kr">eval</span><span class="p">(</span><span class="s2">"vm."</span><span class="o">+</span> <span class="nx">value</span> <span class="o">+</span> <span class="s2">"= e.target.value"</span><span class="p">);</span>
+                        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                            <span class="nx">vm</span><span class="p">[</span><span class="nx">value</span><span class="p">]</span> <span class="o">=</span> <span class="nx">e</span><span class="p">.</span><span class="nx">target</span><span class="p">.</span><span class="nx">value</span>
+                        <span class="p">}</span>                        
+                    <span class="p">})</span>
+                <span class="p">})</span>
+            <span class="p">}</span>
+
+            <span class="k">if</span> <span class="p">(</span><span class="nx">node</span><span class="p">.</span><span class="nx">childNodes</span> <span class="o">&amp;&amp;</span> <span class="nx">node</span><span class="p">.</span><span class="nx">childNodes</span><span class="p">.</span><span class="nx">length</span><span class="p">)</span> <span class="p">{</span>
+                <span class="nx">replace</span><span class="p">(</span><span class="nx">node</span><span class="p">)</span>
+            <span class="p">}</span>
+        <span class="p">})</span>
+    <span class="p">}</span>
+
+    <span class="nx">replace</span><span class="p">(</span><span class="nx">fragment</span><span class="p">);</span>
+    <span class="nx">vm</span><span class="p">.</span><span class="nx">$el</span><span class="p">.</span><span class="nx">appendChild</span><span class="p">(</span><span class="nx">fragment</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h4 id="laoded">LAODED</h4>
+
+<blockquote>
+  <p>以上是一个简单的mvvm框架的实现，当然defineProperty还是有一些问题，比如说对应数组的变更检测是办不到，而Proxy的出现则解决了这类问题，有时间的话，大家可以试试基于Proxy去实现一套简单的mvvm框架。</p>
+</blockquote>
+
+  </div><a class="u-url" href="/jekyll/update/2018/07/02/Mvvm.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading"></h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name"></li><li><a class="u-email" href="mailto:525168624@qq.com.com">525168624@qq.com.com</a></li></ul>
+      </div>
+
+      <div class="footer-col footer-col-2"><ul class="social-media-list"><li><a href="https://github.com/pumpkindev"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">pumpkindev</span></a></li></ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Write an awesome description for your new site here. You can edit this line in _config.yml. It will appear in your document head meta (for Google search results) and in your feed.xml site description.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>
