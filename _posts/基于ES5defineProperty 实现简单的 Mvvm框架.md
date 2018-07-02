@@ -2,7 +2,7 @@
 layout: post
 title: 基于ES5`defineProperty` 实现简单的 Mvvm框架
 date:   2018-07-02 22:09:40 +0800
-categories: je
+categories:  jekyll update
 ---
 
 #### PREPARE
