@@ -12,7 +12,7 @@
 我们来看一个很普通的例子
 
 ```js
-let obs = Rx.Observable.create(observer => observer.next(new Date().valueOf()));
+let obs = Observable.create(observer => observer.next(new Date().valueOf()));
 
 obs.subscribe(v => console.log("1st subscriber: " + v));
 obs.subscribe(v => console.log("2nd subscriber: " + v));
@@ -27,15 +27,48 @@ obs.subscribe(v => console.log("2nd subscriber: " + v));
 
 可以看出，new Date()被执行了两次，也就是意味着每次在订阅的时候。才开始新建observable
 
+## 加热
+```js
+let obs = Observable
+      .create(observer => observer.next(Date.now())).pipe(publish())
+    obs.subscribe(v => console.log("1st subscriber: " + v));
+    obs.subscribe(v => console.log("2nd subscriber: " + v));
+    obs.connect()
+```
+输出结果为：
+```js
+1st subscriber: 1552460322034
+2nd subscriber: 1552460322034
+```
+这次输出结果是只调用了一次new date(),现在看起来热了一点，但是，这个只能算是暖模式，不是真正的热模式.下面的例子就是一个证明
+```js
+  let obs = interval(1000)
+      .pipe(publish(), refCount())
+    setTimeout(() => {
+      obs.subscribe(v => console.log("1st subscriber:" + v));
+      setTimeout(
+        () => obs.subscribe(
+          v => console.log("2nd subscriber:" + v)), 1100);
+    }, 2000);
+```
+输出结果为：
+```js
+1st subscriber:0
+1st subscriber:1
+2nd subscriber:1
+1st subscriber:2
+2nd subscriber:2
+```
+如果publish之后是热模式的话，值应该是从2开始，但是它是从1开始的，这是因为refCount在起作用。publish操作符创建了一个被称为ConnectableObservable的序列，该序列对于数据源共享同一个订阅。然而此时publish操作符还没有订阅到数据源。它更像一个守门员，保证所有的订阅都订阅到ConnectableObservable上面，而不是数据源本身。
+要想加热的热模式，就要手动调用connect
 ## 关于热模式
 
 将上面代码做变化，如下
 
 ```js
-let obs = Rx.Observable
-            .interval(1000)
-            .publish();
-obs.connect();
+let obs =  interval(1000)
+      .pipe(publish()) as ConnectableObservable<any>
+    obs.connect();
 
 setTimeout(() => {
   obs.subscribe(v => console.log("1st subscriber:" + v));
@@ -53,7 +86,7 @@ setTimeout(() => {
 2nd subscriber:3
 ```
 
-此时的`obs`是完完全全的热模式，它会在创建后立即产生数据而不管有没有订阅者。
+此时的`obs`是完完全全的热模式，它会在创建后立即产生数据而不管有没有订阅者。所以0,1都没有监听到
 
 ## RXJS操作符（待完善）
 
